@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cashier Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="/theme.js"></script>
+</head>
+<body class="cashier-page">
+
+  <header class="dash-header">
+    <div class="dash-header-left">
+      <img class="cafe-logo" src="" alt="logo" style="display:none;height:28px;width:28px;object-fit:contain;border-radius:6px;">
+      <h1>💳 Cashier</h1>
+      <div class="live-dot" id="live-dot" title="Auto-refreshing"></div>
+    </div>
+    <div class="dash-header-right">
+      <div class="filter-tabs" id="filter-tabs">
+        <button class="filter-tab active" data-status="active">Active</button>
+        <button class="filter-tab" data-status="all">All</button>
+        <button class="filter-tab" data-status="completed">Completed</button>
+      </div>
+      <button class="refresh-btn" id="refresh-btn" title="Refresh">↺</button>
+    </div>
+  </header>
+
+  <!-- Stats Bar -->
+  <div class="stats-bar">
+    <div class="stat-pill">
+      <span class="stat-label">Pending</span>
+      <span class="stat-val" id="stat-pending">0</span>
+    </div>
+    <div class="stat-pill">
+      <span class="stat-label">Preparing</span>
+      <span class="stat-val" id="stat-preparing">0</span>
+    </div>
+    <div class="stat-pill">
+      <span class="stat-label">Done Today</span>
+      <span class="stat-val" id="stat-completed">0</span>
+    </div>
+    <div class="stat-pill highlight">
+      <span class="stat-label">Today Revenue</span>
+      <span class="stat-val" id="stat-revenue">₹0</span>
+    </div>
+  </div>
+
+
+  <!-- Waiter Calls -->
+  <div class="waiter-calls-bar hidden" id="waiter-calls-bar">
+    <div class="waiter-calls-title">🔔 Waiter Requests</div>
+    <div class="waiter-calls-list" id="waiter-calls-list"></div>
+  </div>
+  <main class="cashier-main" id="cashier-main">
+    <div class="loading-state">
+      <div class="spinner"></div>
+      <p>Loading orders…</p>
+    </div>
+  </main>
+
+  <script>
+    let allOrders = [];
+    let knownOrderIds = new Set();
+    let activeFilter = 'active';
+    let refreshTimer = null;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      loadOrders();
+      startAutoRefresh();
+      document.getElementById('refresh-btn').addEventListener('click', loadOrders);
+      document.getElementById('filter-tabs').addEventListener('click', e => {
+        const btn = e.target.closest('.filter-tab');
+        if (!btn) return;
+        document.querySelectorAll('.filter-tab').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeFilter = btn.dataset.status;
+        renderOrders();
+      });
+      window.addEventListener('beforeunload', stopAutoRefresh);
+      loadWaiterCalls();
+      setInterval(loadWaiterCalls, 5000);
+    });
+
+    // ── fetch ────────────────────────────────────────────────
+    async function loadOrders() {
+      try {
+        const res = await fetch('/api/orders');
+        if (!res.ok) throw new Error();
+        const fresh = await res.json();
+        const hasNew = fresh.some(o => !knownOrderIds.has(o.id)) && allOrders.length > 0;
+        if (hasNew) flashLiveDot();
+        fresh.forEach(o => knownOrderIds.add(o.id));
+        allOrders = fresh;
+        updateStats();
+        renderOrders();
+      } catch { /* keep existing on network hiccup */ }
+    }
+
+    function startAutoRefresh() {
+      refreshTimer = setInterval(loadOrders, 5000);
+      document.getElementById('live-dot').classList.add('pulsing');
+    }
+    function stopAutoRefresh() { clearInterval(refreshTimer); }
+    function flashLiveDot() {
+      const dot = document.getElementById('live-dot');
+      dot.classList.add('flash');
+      setTimeout(() => dot.classList.remove('flash'), 1000);
+    }
+
+    // ── stats ────────────────────────────────────────────────
+    function updateStats() {
+      document.getElementById('stat-pending').textContent   = allOrders.filter(o => o.status === 'pending').length;
+      document.getElementById('stat-preparing').textContent = allOrders.filter(o => o.status === 'preparing').length;
+      document.getElementById('stat-completed').textContent = allOrders.filter(o => o.status === 'completed').length;
+      const today = new Date().toDateString();
+      const rev = allOrders.filter(o => o.status === 'completed' && new Date(o.created_at).toDateString() === today).reduce((s, o) => s + (o.total_price || 0), 0);
+      document.getElementById('stat-revenue').textContent = `₹${(rev / 100).toFixed(0)}`;
+    }
+
+    // ── render ───────────────────────────────────────────────
+    function renderOrders() {
+      const main = document.getElementById('cashier-main');
+      let filtered = allOrders;
+      if (activeFilter === 'active')    filtered = allOrders.filter(o => o.status === 'pending' || o.status === 'preparing');
+      if (activeFilter === 'completed') filtered = allOrders.filter(o => o.status === 'completed');
+
+      if (filtered.length === 0) {
+        main.innerHTML = `<div class="empty-orders"><div style="font-size:3rem">📋</div><p>${activeFilter === 'active' ? 'No active orders right now.' : 'No orders found.'}</p></div>`;
+        return;
+      }
+
+      main.innerHTML = filtered.map(renderCard).join('');
+
+      main.querySelectorAll('.order-action-btn').forEach(btn =>
+        btn.addEventListener('click', () => updateStatus(parseInt(btn.dataset.id), btn.dataset.status)));
+      main.querySelectorAll('.btn-delete-order').forEach(btn =>
+        btn.addEventListener('click', () => deleteOrder(parseInt(btn.dataset.id), btn.dataset.table)));
+      main.querySelectorAll('.btn-wa-receipt').forEach(btn =>
+        btn.addEventListener('click', () => sendWAReceipt(parseInt(btn.dataset.id))));
+    }
+
+    function renderCard(order) {
+      const items = (order.items || []).filter(i => i !== null);
+      const total = order.total_price || 0;
+      const elapsed = getElapsed(order.created_at);
+      const isUrgent = order.status === 'pending' && getElapsedMinutes(order.created_at) >= 5;
+      const waNum = order.whatsapp_number || null;
+
+      return `
+        <div class="order-card ${order.status} ${isUrgent ? 'urgent' : ''}">
+          <div class="order-card-header">
+            <div class="order-meta">
+              <span class="order-table">Table #${order.table_number}</span>
+              <span class="order-id">#${order.id}</span>
+            </div>
+            <div class="order-header-right">
+              <span class="order-elapsed ${isUrgent ? 'urgent-text' : ''}">${elapsed}</span>
+              <span class="status-chip ${order.status}">${statusLabel(order.status)}</span>
+            </div>
+          </div>
+
+          ${waNum ? `
+          <div class="wa-info-row">
+            <span class="wa-num-badge">📱 +91 ${waNum}</span>
+            <button class="btn-wa-receipt" data-id="${order.id}" title="Send receipt on WhatsApp">
+              Send Receipt
+            </button>
+          </div>` : '<div class="wa-info-row"><span class="wa-num-badge no-num">No WhatsApp number</span></div>'}
+
+          <div class="order-items-list">
+            ${items.map(item => `
+              <div class="order-line">
+                <span class="order-line-name">${esc(item.name)} <span class="order-line-qty">×${item.quantity}</span></span>
+                <span class="order-line-price">₹${(item.price * item.quantity / 100).toFixed(2)}</span>
+              </div>
+            `).join('')}
+          </div>
+
+          <div class="order-card-footer">
+            <span class="order-total">Total: ₹${(total / 100).toFixed(2)}</span>
+            <div class="order-actions">
+              ${order.status === 'pending' ? `
+                <button class="order-action-btn prepare" data-id="${order.id}" data-status="preparing">Start Preparing</button>` : ''}
+              ${order.status === 'preparing' ? `
+                <button class="order-action-btn complete" data-id="${order.id}" data-status="completed">Mark Completed</button>` : ''}
+              ${order.status === 'completed' ? `
+                <span class="done-label">✓ Done</span>` : ''}
+              <button class="btn-delete-order" data-id="${order.id}" data-table="${order.table_number}" title="Cancel order">🗑</button>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // ── actions ──────────────────────────────────────────────
+    async function updateStatus(orderId, newStatus) {
+      const btn = document.querySelector(`.order-action-btn[data-id="${orderId}"]`);
+      if (btn) { btn.disabled = true; btn.textContent = '…'; }
+      try {
+        const res = await fetch(`/api/orders/${orderId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: newStatus })
+        });
+        if (!res.ok) throw new Error();
+        await loadOrders();
+      } catch {
+        if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
+      }
+    }
+
+    async function deleteOrder(orderId, tableNum) {
+      if (!confirm(`Cancel order #${orderId} from Table #${tableNum}? This cannot be undone.`)) return;
+      try {
+        const res = await fetch(`/api/orders/${orderId}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error();
+        await loadOrders();
+      } catch {
+        alert('Failed to delete order. Try again.');
+      }
+    }
+
+    function sendWAReceipt(orderId) {
+      const order = allOrders.find(o => o.id === orderId);
+      if (!order || !order.whatsapp_number) return;
+
+      const items = (order.items || []).filter(i => i !== null);
+      const lines = items.map(i =>
+        `• ${i.name} ×${i.quantity} — ₹${(i.price * i.quantity / 100).toFixed(2)}`
+      ).join('\n');
+      const total = order.total_price || 0;
+
+      const msg = encodeURIComponent(
+        `🧾 *Order Receipt*\n` +
+        `Order #${order.id} | Table #${order.table_number}\n\n` +
+        `${lines}\n\n` +
+        `*Total: ₹${(total / 100).toFixed(2)}*\n\n` +
+        `Thank you for visiting! ☕`
+      );
+
+      window.open(`https://wa.me/91${order.whatsapp_number}?text=${msg}`, '_blank');
+    }
+
+    // ── helpers ──────────────────────────────────────────────
+    function statusLabel(s) {
+      return s === 'pending' ? '🟡 Pending' : s === 'preparing' ? '🔵 Preparing' : '🟢 Done';
+    }
+    function getElapsedMinutes(ts) {
+      return Math.floor((Date.now() - new Date(ts)) / 60000);
+    }
+    function getElapsed(ts) {
+      const m = getElapsedMinutes(ts);
+      if (m < 1) return 'Just now';
+      if (m < 60) return `${m}m ago`;
+      return `${Math.floor(m / 60)}h ${m % 60}m ago`;
+    }
+    // ── waiter calls ──────────────────────────────────────
+    async function loadWaiterCalls() {
+      try {
+        const res = await fetch("/api/waiter");
+        if (!res.ok) return;
+        const calls = await res.json();
+        const bar  = document.getElementById("waiter-calls-bar");
+        const list = document.getElementById("waiter-calls-list");
+        if (calls.length === 0) { bar.classList.add("hidden"); return; }
+        bar.classList.remove("hidden");
+        list.innerHTML = calls.map(c => `
+          <div class="waiter-call-chip">
+            <span>Table #${c.table_number}</span>
+            <span class="waiter-call-time">${getElapsed(c.created_at)}</span>
+            <button class="waiter-dismiss-btn" data-id="${c.id}">Done</button>
+          </div>`).join("");
+        list.querySelectorAll(".waiter-dismiss-btn").forEach(btn =>
+          btn.addEventListener("click", () => dismissWaiter(parseInt(btn.dataset.id))));
+      } catch {}
+    }
+
+    async function dismissWaiter(id) {
+      try {
+        await fetch("/api/waiter/" + id, { method: "DELETE" });
+        await loadWaiterCalls();
+      } catch {}
+    }
+
+    function esc(str) {
+      if (!str) return '';
+      const d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scan QR Code - Café Menu</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="/theme.js"></script>
+</head>
+<body>
+  <div class="scan-container">
+    <div class="scan-brand">
+      <img class="cafe-logo" src="" alt="logo" style="display:none;height:40px;width:40px;object-fit:contain;border-radius:8px;">
+      <h1 class="cafe-name-text">☕ Our Café</h1>
+    </div>
+    <p class="instruction">Scan this QR using your phone to open the menu.</p>
+    
+    <!-- QR Code Container -->
+    <div class="qr-code">
+      <div id="qr-code"></div>
+    </div>
+    
+    <p class="table-info">Table #1</p>
+    <p class="hint">Point your camera at the QR code to view our menu on your phone!</p>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <style>
+    .qr-code {
+      margin: 20px auto;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 300px;
+    }
+    
+    #qr-code {
+      max-width: 100%;
+      height: auto;
+    }
+  </style>
+  <script>
+    // Generate QR code when page loads
+    document.addEventListener('DOMContentLoaded', () => {
+      const host = window.location.hostname;
+      const port = window.location.port;
+      const menuUrl = `http://${host}:${port}/menu?table=1`;
+
+      console.log('Generating QR code for:', menuUrl);
+
+      new QRCode(document.getElementById('qr-code'), {
+        text: menuUrl,
+        width: 300,
+        height: 300,
+        colorDark: '#000000',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.H
+      });
+    });
+  </script>
+</body>
+</html>
